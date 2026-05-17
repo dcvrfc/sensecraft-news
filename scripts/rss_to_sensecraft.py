@@ -22,6 +22,8 @@ def clean_text(text):
         return ""
     text = re.sub(r'[\n\r\t]+', ' ', text)
     text = re.sub(r'\s+', ' ', text).strip()
+    text = text.replace('\u3000', '')  # 全角空格
+    text = text.replace(' ', '-')      # 半角空格换短横
     return text
 
 
