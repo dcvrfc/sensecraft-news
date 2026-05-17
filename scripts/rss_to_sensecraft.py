@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
-"""Fetch multiple RSS sources and push to SenseCraft HMI."""
+"""Fetch multiple RSS sources and push random items to SenseCraft HMI."""
 
-import os, re, sys
+import os, re, sys, random
 import feedparser, requests
 from html import unescape
 
 API_KEY = os.environ.get("SENSECRAFT_API_KEY")
 DEVICE_ID = os.environ.get("SENSECRAFT_DEVICE_ID")
 SOURCES_RAW = os.environ.get("RSS_SOURCES",
-    "源1|https://这里填RSS地址1|3")
-SUMMARY_LEN = int(os.environ.get("SUMMARY_LEN", "60"))
+    "源1|https://这里填RSS地址1|2")
 
 if not API_KEY or not DEVICE_ID:
     print("ERROR: SENSECRAFT_API_KEY and SENSECRAFT_DEVICE_ID must be set")
@@ -17,7 +16,6 @@ if not API_KEY or not DEVICE_ID:
 
 
 def clean_html(html_text):
-    """Strip HTML tags, unescape entities, return plain text."""
     text = re.sub(r'<[^>]+>', ' ', html_text)
     text = unescape(text)
     text = re.sub(r'\s+', ' ', text).strip()
@@ -25,21 +23,14 @@ def clean_html(html_text):
 
 
 def format_date(pub_date):
-    """Format pubDate to YYYY-MM-DD."""
     if not pub_date:
         return ""
-    # Try to extract date from various formats
     m = re.match(r'(\d{4}-\d{2}-\d{2})', pub_date)
-    if m:
-        return m.group(1)
-    return pub_date[:10] if len(pub_date) >= 10 else pub_date
+    return m.group(1) if m else pub_date[:10]
 
 
 def build_item_text(title, summary, date_str):
-    """Build multi-line text for one news item."""
-    summary_clean = clean_html(summary)[:SUMMARY_LEN]
-    if summary_clean:
-        summary_clean = summary_clean.rstrip("，。；,.;") + "…"
+    summary_clean = clean_html(summary)
     parts = [title]
     if summary_clean:
         parts.append(summary_clean)
@@ -61,7 +52,7 @@ if not sources:
     print("ERROR: No valid RSS sources configured")
     sys.exit(1)
 
-# Fetch all sources
+# Fetch all sources and randomly pick items
 all_items = []
 for name, url, count in sources:
     print(f"\n[{name}] Fetching: {url}")
@@ -69,8 +60,13 @@ for name, url, count in sources:
     if feed.bozo and not feed.entries:
         print(f"  WARNING: Failed to parse, skipping")
         continue
-    fetched = 0
-    for entry in feed.entries[:count]:
+
+    entries = feed.entries[:]
+    print(f"  Available: {len(entries)} items")
+
+    # Build list of valid items
+    valid = []
+    for entry in entries:
         title = entry.get("title", "").strip()
         if not title:
             continue
@@ -79,25 +75,36 @@ for name, url, count in sources:
             summary=entry.get("summary", "") or entry.get("description", ""),
             date_str=format_date(entry.get("published", "") or entry.get("pubDate", "")),
         )
-        all_items.append({"source": name, "text": text})
-        fetched += 1
-    print(f"  Got {fetched} items")
+        valid.append(text)
+
+    # Randomly pick `count` items (without duplicates)
+    pick = min(count, len(valid))
+    if pick < count:
+        print(f"  WARNING: Only {len(valid)} valid items, picking all")
+
+    chosen = random.sample(valid, pick)
+    for item in chosen:
+        all_items.append({"source": name, "text": item})
+
+    print(f"  Picked {pick} items randomly")
 
 if not all_items:
     print("\nERROR: No news fetched")
     sys.exit(1)
+
+# Shuffle all items so sources are mixed
+random.shuffle(all_items)
 
 # Push to SenseCraft
 data = {}
 for i, item in enumerate(all_items, 1):
     data[f"news{i}"] = item["text"]
 
-print(f"\n=== Pushing {len(all_items)} items ===")
+print(f"\n=== Pushing {len(all_items)} items (random order) ===")
 for i, item in enumerate(all_items, 1):
     print(f"  news{i}: [{item['source']}]")
     for line in item["text"].split("\n"):
         print(f"    {line}")
-    print()
 
 payload = {"device_id": int(DEVICE_ID), "data": data}
 resp = requests.post(
@@ -108,8 +115,8 @@ resp = requests.post(
 
 result = resp.json()
 if resp.status_code == 200 and result.get("code") == 200:
-    print(f"SUCCESS: {len(data)} items pushed!")
+    print(f"\nSUCCESS: {len(data)} items pushed!")
     sys.exit(0)
 else:
-    print(f"ERROR: {resp.status_code} - {result}")
+    print(f"\nERROR: {resp.status_code} - {result}")
     sys.exit(1)
