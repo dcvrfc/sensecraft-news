@@ -19,5 +19,5 @@ jobs:
         env:
           SENSECRAFT_API_KEY: ${{ secrets.SENSECRAFT_API_KEY }}
           SENSECRAFT_DEVICE_ID: ${{ secrets.SENSECRAFT_DEVICE_ID }}
-          RSS_SOURCES: '纽约时报|https://plink.anyfeeder.com/nytimes/dual|2,AIHot|https://aihot.virxact.com/feed/daily.xml|2,IT之家|https://www.ithome.com/rss/|2'
+          RSS_SOURCES: '纽约时报|https://plink.anyfeeder.com/nytimes/dual|2,AIHot|https://aihot.virxact.com/feed.xml|2,IT之家|https://www.ithome.com/rss/|2'
         run: python scripts/rss_to_sensecraft.py
