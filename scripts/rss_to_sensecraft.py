@@ -25,11 +25,31 @@ def clean_html(html_text):
     return text
 
 
+def clean_text(text):
+    """Remove any newlines/tabs from text, keep it as one line."""
+    if not text:
+        return ""
+    return re.sub(r'[\n\r\t]+', ' ', text).strip()
+
+
 def format_date(pub_date):
     if not pub_date:
         return ""
+    # Try YYYY-MM-DD (e.g. 2026-05-17 14:08:32 +0800)
     m = re.match(r'(\d{4}-\d{2}-\d{2})', pub_date)
-    return m.group(1) if m else pub_date[:10]
+    if m:
+        return m.group(1)
+    # Try "DD Mon YYYY" (e.g. Sun, 17 May 2026)
+    m = re.search(r'(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})', pub_date, re.I)
+    months = {'Jan':'01','Feb':'02','Mar':'03','Apr':'04','May':'05','Jun':'06',
+              'Jul':'07','Aug':'08','Sep':'09','Oct':'10','Nov':'11','Dec':'12'}
+    if m:
+        return f"{m.group(3)}-{months.get(m.group(2),'00')}-{int(m.group(1)):02d}"
+    # Fallback: just the year
+    m = re.search(r'(\d{4})', pub_date)
+    if m:
+        return m.group(1)
+    return pub_date[:10]
 
 
 def build_item(title, summary, date_str):
@@ -37,13 +57,12 @@ def build_item(title, summary, date_str):
     if SUMMARY_MAX > 0 and len(summary_clean) > SUMMARY_MAX:
         summary_clean = summary_clean[:SUMMARY_MAX].rstrip("，。；,.;") + "…"
     return {
-        "title": title,
-        "summary": summary_clean,
-        "date": date_str,
+        "title": clean_text(title),
+        "summary": clean_text(summary_clean),
+        "date": clean_text(date_str),
     }
 
 
-# Parse sources
 all_sources = []
 for s in SOURCES_RAW.split(","):
     parts = s.strip().split("|")
@@ -56,71 +75,69 @@ if not all_sources:
     print("ERROR: No valid RSS sources configured")
     sys.exit(1)
 
-# Read last used source from cache file (if exists)
+# Read last used source from cache
 last_source = ""
-cache_path = "last_source.txt"
-if os.path.exists(cache_path):
-    with open(cache_path) as f:
+if os.path.exists("last_source.txt"):
+    with open("last_source.txt") as f:
         last_source = f.read().strip()
-        print(f"Last source was: [{last_source}]")
+    print(f"Last source was: [{last_source}]")
 
-# Exclude last source to avoid consecutive repeat
 candidates = [s for s in all_sources if s[0] != last_source]
 if not candidates:
     candidates = all_sources
 
-# Pick one random source
-name, url = random.choice(candidates)
-print(f"Randomly picked: [{name}]")
+# 选第一个源
+name1, url1 = random.choice(candidates)
+print(f"1st source: [{name1}]")
 
-# Save current source to cache file
-with open(cache_path, "w") as f:
-    f.write(name)
+# 保存第一个源到缓存（避免下次连续重复）
+with open("last_source.txt", "w") as f:
+    f.write(name1)
 
-print(f"Fetching: {url}")
+# 选第二个源（跟第一个不同）
+remaining = [s for s in all_sources if s[0] != name1]
+name2, url2 = random.choice(remaining) if remaining else (name1, url1)
+print(f"2nd source: [{name2}]")
 
-feed = feedparser.parse(url)
-if feed.bozo and not feed.entries:
-    print(f"ERROR: Failed to parse feed")
+# 取两个源各 1 条
+chosen = []
+for src_name, src_url in [(name1, url1), (name2, url2)]:
+    print(f"  Fetching: [{src_name}]")
+    feed = feedparser.parse(src_url)
+    if feed.bozo and not feed.entries:
+        print(f"    WARNING: Failed to parse, skip")
+        continue
+    valid = []
+    for entry in feed.entries:
+        title = entry.get("title", "").strip()
+        if not title:
+            continue
+        valid.append(build_item(
+            title=title,
+            summary=entry.get("summary", "") or entry.get("description", ""),
+            date_str=format_date(entry.get("published", "") or entry.get("pubDate", "")),
+        ))
+    if not valid:
+        print(f"    WARNING: No valid items, skip")
+        continue
+    item = random.choice(valid)
+    chosen.append({"source": src_name, **item})
+    print(f"    Got 1 item")
+
+if not chosen:
+    print("ERROR: No items fetched")
     sys.exit(1)
 
-entries = feed.entries[:]
-print(f"Available: {len(entries)} items")
-
-valid = []
-for entry in entries:
-    title = entry.get("title", "").strip()
-    if not title:
-        continue
-    item = build_item(
-        title=title,
-        summary=entry.get("summary", "") or entry.get("description", ""),
-        date_str=format_date(entry.get("published", "") or entry.get("pubDate", "")),
-    )
-    valid.append(item)
-
-pick = min(PICK_COUNT, len(valid))
-if pick < PICK_COUNT:
-    print(f"WARNING: Only {len(valid)} valid items, picking all")
-
-chosen = random.sample(valid, pick)
-print(f"Picked {pick} items")
-
-# Push to SenseCraft
 data = {}
 for i, item in enumerate(chosen, 1):
     data[f"news{i}_title"] = item["title"]
     data[f"news{i}_summary"] = item["summary"]
     data[f"news{i}_date"] = item["date"]
-data["source_name"] = name  # 来源名称
+    data[f"news{i}_source"] = item["source"]
 
-print(f"\n=== Pushing {pick} items from [{name}] ===")
+print(f"\n=== Pushing {len(chosen)} items ===")
 for i, item in enumerate(chosen, 1):
-    print(f"  news{i}:")
-    print(f"    title:   {item['title']}")
-    print(f"    summary: {item['summary'][:60]}...")
-    print(f"    date:    {item['date']}")
-print(f"  source:   {name}")
+    print(f"  news{i}: [{item['source']}] {item['title'][:50]}...")
 
 payload = {"device_id": int(DEVICE_ID), "data": data}
 resp = requests.post(
@@ -131,7 +148,7 @@ resp = requests.post(
 
 result = resp.json()
 if resp.status_code == 200 and result.get("code") == 200:
-    print(f"\nSUCCESS: {pick} items from [{name}] pushed!")
+    print(f"\nSUCCESS: pushed!")
     sys.exit(0)
 else:
     print(f"\nERROR: {resp.status_code} - {result}")
