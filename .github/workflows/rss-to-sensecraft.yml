@@ -9,15 +9,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # 恢复缓存：上次用的哪个源（避免连续重复）
+      - name: Restore last source cache
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: last_source.txt
+          key: sensecraft-last-source
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
       - name: Install dependencies
         run: pip install -r requirements.txt
+
       - name: Fetch RSS and push to SenseCraft
         env:
           SENSECRAFT_API_KEY: ${{ secrets.SENSECRAFT_API_KEY }}
           SENSECRAFT_DEVICE_ID: ${{ secrets.SENSECRAFT_DEVICE_ID }}
-          RSS_SOURCES: '纽约时报|https://plink.anyfeeder.com/nytimes/dual|2,AIHot|https://aihot.virxact.com/feed.xml|2,IT之家|https://www.ithome.com/rss/|2'
+          RSS_SOURCES: '纽约时报|https://plink.anyfeeder.com/nytimes/cn,AIHot|https://aihot.virxact.com/feed.xml,华尔街日报|https://plink.anyfeeder.com/wsj/cn,美团技术团队|https://tech.meituan.com/feed/,BBC|https://plink.anyfeeder.com/bbc/cn,联合早报-中港台|https://plink.anyfeeder.com/zaobao/realtime/china,联合早报-国际|https://plink.anyfeeder.com/zaobao/realtime/world'
+          PICK_COUNT: '2'
+          SUMMARY_MAX: '150'
         run: python scripts/rss_to_sensecraft.py
