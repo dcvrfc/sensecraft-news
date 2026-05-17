@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""Fetch multiple RSS sources and push random items to SenseCraft HMI."""
+"""Fetch RSS sources, pick one randomly (no consecutive repeat),
+and push 2 items with source name to SenseCraft HMI."""
 
-import os, re, sys, random
+import os, re, sys, random, json
 import feedparser, requests
 from html import unescape
 
 API_KEY = os.environ.get("SENSECRAFT_API_KEY")
 DEVICE_ID = os.environ.get("SENSECRAFT_DEVICE_ID")
 SOURCES_RAW = os.environ.get("RSS_SOURCES",
-    "源1|https://这里填RSS地址1|2")
+    "源1|https://这里填RSS地址1")
+SUMMARY_MAX = int(os.environ.get("SUMMARY_MAX", "150"))
+PICK_COUNT = int(os.environ.get("PICK_COUNT", "2"))
 
 if not API_KEY or not DEVICE_ID:
     print("ERROR: SENSECRAFT_API_KEY and SENSECRAFT_DEVICE_ID must be set")
@@ -29,82 +32,95 @@ def format_date(pub_date):
     return m.group(1) if m else pub_date[:10]
 
 
-def build_item_text(title, summary, date_str):
+def build_item(title, summary, date_str):
     summary_clean = clean_html(summary)
-    parts = [title]
-    if summary_clean:
-        parts.append(summary_clean)
-    if date_str:
-        parts.append(date_str)
-    return "\n".join(parts)
+    if SUMMARY_MAX > 0 and len(summary_clean) > SUMMARY_MAX:
+        summary_clean = summary_clean[:SUMMARY_MAX].rstrip("，。；,.;") + "…"
+    return {
+        "title": title,
+        "summary": summary_clean,
+        "date": date_str,
+    }
 
 
 # Parse sources
-sources = []
+all_sources = []
 for s in SOURCES_RAW.split(","):
     parts = s.strip().split("|")
-    if len(parts) == 3:
-        sources.append((parts[0], parts[1], int(parts[2])))
+    if len(parts) == 2:
+        all_sources.append((parts[0], parts[1]))
     else:
         print(f"WARNING: Skipping invalid source: {s}")
 
-if not sources:
+if not all_sources:
     print("ERROR: No valid RSS sources configured")
     sys.exit(1)
 
-# Fetch all sources and randomly pick items
-all_items = []
-for name, url, count in sources:
-    print(f"\n[{name}] Fetching: {url}")
-    feed = feedparser.parse(url)
-    if feed.bozo and not feed.entries:
-        print(f"  WARNING: Failed to parse, skipping")
-        continue
+# Read last used source from cache file (if exists)
+last_source = ""
+cache_path = "last_source.txt"
+if os.path.exists(cache_path):
+    with open(cache_path) as f:
+        last_source = f.read().strip()
+        print(f"Last source was: [{last_source}]")
 
-    entries = feed.entries[:]
-    print(f"  Available: {len(entries)} items")
+# Exclude last source to avoid consecutive repeat
+candidates = [s for s in all_sources if s[0] != last_source]
+if not candidates:
+    candidates = all_sources
 
-    # Build list of valid items
-    valid = []
-    for entry in entries:
-        title = entry.get("title", "").strip()
-        if not title:
-            continue
-        text = build_item_text(
-            title=title,
-            summary=entry.get("summary", "") or entry.get("description", ""),
-            date_str=format_date(entry.get("published", "") or entry.get("pubDate", "")),
-        )
-        valid.append(text)
+# Pick one random source
+name, url = random.choice(candidates)
+print(f"Randomly picked: [{name}]")
 
-    # Randomly pick `count` items (without duplicates)
-    pick = min(count, len(valid))
-    if pick < count:
-        print(f"  WARNING: Only {len(valid)} valid items, picking all")
+# Save current source to cache file
+with open(cache_path, "w") as f:
+    f.write(name)
 
-    chosen = random.sample(valid, pick)
-    for item in chosen:
-        all_items.append({"source": name, "text": item})
+print(f"Fetching: {url}")
 
-    print(f"  Picked {pick} items randomly")
-
-if not all_items:
-    print("\nERROR: No news fetched")
+feed = feedparser.parse(url)
+if feed.bozo and not feed.entries:
+    print(f"ERROR: Failed to parse feed")
     sys.exit(1)
 
-# Shuffle all items so sources are mixed
-random.shuffle(all_items)
+entries = feed.entries[:]
+print(f"Available: {len(entries)} items")
+
+valid = []
+for entry in entries:
+    title = entry.get("title", "").strip()
+    if not title:
+        continue
+    item = build_item(
+        title=title,
+        summary=entry.get("summary", "") or entry.get("description", ""),
+        date_str=format_date(entry.get("published", "") or entry.get("pubDate", "")),
+    )
+    valid.append(item)
+
+pick = min(PICK_COUNT, len(valid))
+if pick < PICK_COUNT:
+    print(f"WARNING: Only {len(valid)} valid items, picking all")
+
+chosen = random.sample(valid, pick)
+print(f"Picked {pick} items")
 
 # Push to SenseCraft
 data = {}
-for i, item in enumerate(all_items, 1):
-    data[f"news{i}"] = item["text"]
+for i, item in enumerate(chosen, 1):
+    data[f"news{i}_title"] = item["title"]
+    data[f"news{i}_summary"] = item["summary"]
+    data[f"news{i}_date"] = item["date"]
+data["source_name"] = name  # 来源名称
 
-print(f"\n=== Pushing {len(all_items)} items (random order) ===")
-for i, item in enumerate(all_items, 1):
-    print(f"  news{i}: [{item['source']}]")
-    for line in item["text"].split("\n"):
-        print(f"    {line}")
+print(f"\n=== Pushing {pick} items from [{name}] ===")
+for i, item in enumerate(chosen, 1):
+    print(f"  news{i}:")
+    print(f"    title:   {item['title']}")
+    print(f"    summary: {item['summary'][:60]}...")
+    print(f"    date:    {item['date']}")
+print(f"  source:   {name}")
 
 payload = {"device_id": int(DEVICE_ID), "data": data}
 resp = requests.post(
@@ -115,7 +131,7 @@ resp = requests.post(
 
 result = resp.json()
 if resp.status_code == 200 and result.get("code") == 200:
-    print(f"\nSUCCESS: {len(data)} items pushed!")
+    print(f"\nSUCCESS: {pick} items from [{name}] pushed!")
     sys.exit(0)
 else:
     print(f"\nERROR: {resp.status_code} - {result}")
