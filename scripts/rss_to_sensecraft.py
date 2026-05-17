@@ -26,10 +26,12 @@ def clean_html(html_text):
 
 
 def clean_text(text):
-    """Remove any newlines/tabs from text, keep it as one line."""
+    """Remove any newlines/tabs from text, collapse spaces."""
     if not text:
         return ""
-    return re.sub(r'[\n\r\t]+', ' ', text).strip()
+    text = re.sub(r'[\n\r\t]+', ' ', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
 
 
 def format_date(pub_date):
@@ -165,7 +167,7 @@ if not chosen:
 data = {}
 for i, item in enumerate(chosen, 1):
     data[f"news{i}_title"] = item["title"]
-    data[f"news{i}_source_date"] = f"{item['source']} · {item['date']}"
+    data[f"news{i}_source_date"] = f"{item['source']}·{item['date']}"
 
 print(f"\n=== Pushing {len(chosen)} items ===")
 for i, item in enumerate(chosen, 1):
