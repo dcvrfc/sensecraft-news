@@ -1,0 +1,24 @@
+name: RSS to SenseCraft News Push
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+jobs:
+  fetch-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Fetch RSS and push to SenseCraft
+        env:
+          SENSECRAFT_API_KEY: ${{ secrets.SENSECRAFT_API_KEY }}
+          SENSECRAFT_DEVICE_ID: ${{ secrets.SENSECRAFT_DEVICE_ID }}
+          RSS_URL: 'https://aihot.virxact.com/feed.xml'
+          MAX_ITEMS: '5'
+        run: python scripts/rss_to_sensecraft.py
